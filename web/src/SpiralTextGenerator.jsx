@@ -1,21 +1,26 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Settings, Download, Type, Image as ImageIcon, RotateCw, AlignLeft, AlignRight, RefreshCw, Circle, Palette, X, Check } from 'lucide-react';
-import './index.css';
+import { Settings, Download, Type, Image as ImageIcon, RotateCw, AlignLeft, AlignRight, RefreshCw, Circle, Palette, X, Check, Square, Triangle, Hexagon, Move, Maximize2, RefreshCcw } from 'lucide-react';
 
 const SpiralTextGenerator = () => {
   // --- 状态管理 ---
   const [text, setText] = useState("Life is a spiral, keep moving forward. ");
   const [fontSize, setFontSize] = useState(24);
-  const [letterSpacing, setLetterSpacing] = useState(2); // 字与字之间的距离
-  const [spiralGap, setSpiralGap] = useState(40); // 螺旋线之间的间距 (疏密)
-  const [startRadius, setStartRadius] = useState(60); // 起始圆的半径
-  const [isClockwise, setIsClockwise] = useState(true); // 螺旋方向
-  const [isInwardText, setIsInwardText] = useState(false); // 文字朝向（字头朝内还是朝外）
-  const [isRTL, setIsRTL] = useState(false); // 是否是从右向左书写 (希伯来语/阿拉伯语)
-  const [centerImage, setCenterImage] = useState(null); // 中心图片 URL
-  const [canvasSize, setCanvasSize] = useState(800); // 基础画布大小
-  const [textColor, setTextColor] = useState("#000000"); // 文字颜色
-  
+  const [letterSpacing, setLetterSpacing] = useState(2); 
+  const [spiralGap, setSpiralGap] = useState(40); 
+  const [startRadius, setStartRadius] = useState(60); 
+  const [isClockwise, setIsClockwise] = useState(true); 
+  const [isInwardText, setIsInwardText] = useState(false); 
+  const [isRTL, setIsRTL] = useState(false); 
+  const [centerImage, setCenterImage] = useState(null); 
+  const [canvasSize, setCanvasSize] = useState(800); 
+  const [textColor, setTextColor] = useState("#000000"); 
+  const [spiralShape, setSpiralShape] = useState('circle'); 
+
+  // 变换参数
+  const [centerOffset, setCenterOffset] = useState({ x: 0, y: 0 }); // 中心点偏移
+  const [stretch, setStretch] = useState({ x: 1, y: 1 }); // 拉伸系数
+  const [rotationAngle, setRotationAngle] = useState(0); // 旋转角度
+
   // 字体列表
   const fontOptions = [
     { name: "无衬线 (默认)", value: '"Noto Sans", "Arial", sans-serif' },
@@ -32,13 +37,34 @@ const SpiralTextGenerator = () => {
 
   // --- 下载弹窗状态 ---
   const [showDownloadModal, setShowDownloadModal] = useState(false);
-  const [downloadFormat, setDownloadFormat] = useState('png'); // 'png' | 'jpeg'
-  const [downloadQuality, setDownloadQuality] = useState(2); // 1, 2, 4
+  const [downloadFormat, setDownloadFormat] = useState('png'); 
+  const [downloadQuality, setDownloadQuality] = useState(2); 
   const [downloadTransparent, setDownloadTransparent] = useState(true);
 
+  // --- 拖拽交互状态 ---
   const canvasRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(null); 
+  const lastMousePos = useRef({ x: 0, y: 0 });
 
-  // --- 图片上传处理 ---
+  // --- 辅助函数：获取形状半径缩放 ---
+  const getShapeScale = (angle, shapeType) => {
+    if (shapeType === 'circle') return 1;
+
+    // --- 常规正多边形处理 ---
+    let sides = 4;
+    if (shapeType === 'triangle') sides = 3;
+    if (shapeType === 'pentagon') sides = 5;
+
+    const segmentAngle = (2 * Math.PI) / sides;
+    let normalizedAngle = angle;
+    if (normalizedAngle < 0) normalizedAngle = Math.abs(normalizedAngle); 
+
+    const rAngle = (normalizedAngle % segmentAngle) - (segmentAngle / 2);
+    const cosVal = Math.cos(rAngle);
+    if (cosVal < 0.001) return 10; 
+    return 1 / cosVal;
+  };
+
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -50,114 +76,325 @@ const SpiralTextGenerator = () => {
     }
   };
 
-  // --- 核心绘制逻辑 (抽离出来以便复用) ---
-  const drawScene = useCallback((ctx, width, height, loadedImg, isTransparentBackground) => {
-    // 1. 清空画布
+  // --- 核心绘制逻辑 ---
+  const drawScene = useCallback((ctx, width, height, loadedImg, isTransparentBackground, isExporting = false) => {
     ctx.clearRect(0, 0, width, height);
-    
-    // 2. 设置背景
     if (!isTransparentBackground) {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, width, height);
     }
 
-    const centerX = width / 2;
-    const centerY = height / 2;
+    const baseCx = width / 2;
+    const baseCy = height / 2;
+    const cx = baseCx + centerOffset.x;
+    const cy = baseCy + centerOffset.y;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rotationAngle); 
 
     // 绘制中心图片
+    const clipRadius = Math.max(0, startRadius - 10); 
     if (loadedImg) {
       ctx.save();
+      ctx.scale(stretch.x, stretch.y);
       ctx.beginPath();
-      const clipRadius = Math.max(0, startRadius - 10); 
-      ctx.arc(centerX, centerY, clipRadius, 0, Math.PI * 2);
+      ctx.arc(0, 0, clipRadius, 0, Math.PI * 2);
       ctx.closePath();
-      ctx.clip();
+      ctx.clip(); 
       
       const scale = Math.max(clipRadius * 2 / loadedImg.width, clipRadius * 2 / loadedImg.height);
-      const x = centerX - (loadedImg.width / 2) * scale;
-      const y = centerY - (loadedImg.height / 2) * scale;
-      ctx.drawImage(loadedImg, x, y, loadedImg.width * scale, loadedImg.height * scale);
+      const imgX = - (loadedImg.width / 2) * scale;
+      const imgY = - (loadedImg.height / 2) * scale;
+      ctx.drawImage(loadedImg, imgX, imgY, loadedImg.width * scale, loadedImg.height * scale);
       ctx.restore();
     } else {
       ctx.beginPath();
-      ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
+      ctx.arc(0, 0, 5, 0, Math.PI * 2);
       ctx.fillStyle = '#e5e7eb';
       ctx.fill();
     }
 
     // 绘制螺旋文字
-    ctx.save();
     ctx.font = `${fontSize}px ${fontFamily}`;
     ctx.fillStyle = textColor;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
 
     let chars = Array.from(text);
-    let angle = 0;
-    if (!isClockwise) angle = Math.PI;
+    let baseAngleOffset = -Math.PI / 2; 
+    if (spiralShape === 'square') baseAngleOffset = -Math.PI / 4;
 
-    let radius = startRadius;
+    let angle = baseAngleOffset;
+    if (!isClockwise) angle = baseAngleOffset + Math.PI;
+
+    let baseRadius = startRadius;
     const b = spiralGap / (2 * Math.PI);
 
     for (let i = 0; i < chars.length; i++) {
       const char = chars[i];
       const charWidth = ctx.measureText(char).width;
-      const arcLength = charWidth + letterSpacing;
-      const thetaDiff = arcLength / radius;
+      
+      const shapeScale = getShapeScale(angle, spiralShape);
+      const currentRealRadius = baseRadius * shapeScale;
 
-      if (isClockwise) {
-        angle += thetaDiff;
-      } else {
-        angle -= thetaDiff;
-      }
+      const safeRadius = Math.max(currentRealRadius, 1);
+      const minStretch = Math.min(stretch.x, stretch.y);
+      
+      let thetaDiff = (charWidth + letterSpacing) / (safeRadius * (minStretch > 0 ? minStretch : 1));
 
-      radius += b * thetaDiff; 
+      const rawX = currentRealRadius * Math.cos(angle);
+      const rawY = currentRealRadius * Math.sin(angle);
+      
+      const x = rawX * stretch.x;
+      const y = rawY * stretch.y;
 
-      const x = centerX + radius * Math.cos(angle);
-      const y = centerY + radius * Math.sin(angle);
+      const lookAheadAngle = angle + (isClockwise ? 0.05 : -0.05);
+      const nextBaseRadius = baseRadius + b * (isClockwise ? 0.05 : -0.05);
+      const nextShapeScale = getShapeScale(lookAheadAngle, spiralShape);
+      const nextRealRadius = nextBaseRadius * nextShapeScale;
+      
+      const nextRawX = nextRealRadius * Math.cos(lookAheadAngle);
+      const nextRawY = nextRealRadius * Math.sin(lookAheadAngle);
+
+      const nextX = nextRawX * stretch.x;
+      const nextY = nextRawY * stretch.y;
+      
+      let charRotation = Math.atan2(nextY - y, nextX - x);
+      
+      if (!isClockwise) charRotation += Math.PI;
+      if (isInwardText) charRotation += Math.PI;
 
       ctx.save();
       ctx.translate(x, y);
-      
-      let rotation = angle + Math.PI / 2;
-      if (!isClockwise) rotation = angle - Math.PI / 2;
-      if (isInwardText) rotation += Math.PI; 
-
-      ctx.rotate(rotation);
+      ctx.rotate(charRotation);
       ctx.fillText(char, 0, 0);
       ctx.restore();
+
+      if (isClockwise) {
+        angle += thetaDiff;
+        baseRadius += b * thetaDiff; 
+      } else {
+        angle -= thetaDiff;
+        baseRadius += b * thetaDiff; 
+      }
     }
+
+    if (!isExporting) {
+       drawControls(ctx);
+    }
+
     ctx.restore();
 
-  }, [text, fontSize, letterSpacing, spiralGap, startRadius, isClockwise, isInwardText, isRTL, textColor, fontFamily]);
+  }, [text, fontSize, letterSpacing, spiralGap, startRadius, isClockwise, isInwardText, isRTL, textColor, fontFamily, spiralShape, centerOffset, stretch, rotationAngle]);
 
+  // --- 绘制控制手柄 ---
+  const drawControls = (ctx) => {
+    // 适配：增大手柄视觉尺寸，方便手机查看
+    const handleSize = 12; // 之前是 8
+    const guideColor = '#3b82f6'; 
 
-  // --- 实时预览的 Effect ---
+    ctx.save();
+    ctx.strokeStyle = guideColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+
+    const guideRadius = Math.max(startRadius, 50) + 20; 
+    
+    ctx.beginPath();
+    if (spiralShape === 'circle') {
+        ctx.ellipse(0, 0, guideRadius * stretch.x, guideRadius * stretch.y, 0, 0, Math.PI * 2);
+    } else {
+        const w = guideRadius * stretch.x;
+        const h = guideRadius * stretch.y;
+        ctx.rect(-w, -h, w * 2, h * 2);
+    }
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = guideColor;
+    ctx.lineWidth = 3; // 加粗线条
+
+    // Center Handle
+    ctx.beginPath();
+    ctx.arc(0, 0, handleSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-6, 0); ctx.lineTo(6, 0);
+    ctx.moveTo(0, -6); ctx.lineTo(0, 6);
+    ctx.stroke();
+
+    // Right Handle
+    const handleX = guideRadius * stretch.x;
+    ctx.beginPath();
+    ctx.arc(handleX, 0, handleSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = guideColor;
+    ctx.font = '14px sans-serif'; // 增大字体
+    ctx.fillText('↔', handleX - 7, 22);
+
+    // Bottom Handle
+    const handleY = guideRadius * stretch.y;
+    ctx.beginPath();
+    ctx.arc(0, handleY, handleSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = guideColor;
+    ctx.fillText('↕', 12, handleY + 5);
+
+    // Rotation Handle
+    const rotHandleY = - (guideRadius * stretch.y + 50); // 拉长杆子防止手指遮挡
+    ctx.beginPath();
+    ctx.moveTo(0, - (guideRadius * stretch.y)); 
+    ctx.lineTo(0, rotHandleY);
+    ctx.strokeStyle = guideColor;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, rotHandleY, handleSize, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = guideColor;
+    ctx.fillText('↻', -5, rotHandleY + 5);
+
+    ctx.restore();
+  };
+
+  // --- 交互事件处理 ---
+  const getCanvasPoint = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    // 兼容 Touch 和 Mouse 事件
+    const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+      scaleX // 返回缩放比例用于计算触控区域
+    };
+  };
+
+  const toLocalSpace = (screenX, screenY) => {
+    const width = canvasSize;
+    const height = canvasSize;
+    const baseCx = width / 2;
+    const baseCy = height / 2;
+    const cx = baseCx + centerOffset.x;
+    const cy = baseCy + centerOffset.y;
+
+    const dx = screenX - cx;
+    const dy = screenY - cy;
+
+    const cos = Math.cos(-rotationAngle);
+    const sin = Math.sin(-rotationAngle);
+    
+    const localX = dx * cos - dy * sin;
+    const localY = dx * sin + dy * cos;
+
+    return { x: localX, y: localY, cx, cy }; 
+  };
+
+  const hitTest = (screenX, screenY, scaleFactor) => {
+    const { x, y } = toLocalSpace(screenX, screenY);
+    
+    const guideRadius = Math.max(startRadius, 50) + 20; 
+    
+    // 适配：动态计算触控区域
+    // 在手机上，Canvas 可能被缩小显示 (scaleFactor > 1)。
+    // 我们希望屏幕上的触控区域至少有 30-40px。
+    // 所以 Canvas 坐标系中的半径应该是: 目标屏幕像素 * scaleFactor
+    const minTouchTarget = 40; // 屏幕像素
+    const handleHitRadius = Math.max(25, minTouchTarget * (scaleFactor || 1) * 0.5);
+
+    if (Math.hypot(x, y) < handleHitRadius) return 'center';
+
+    const hx = guideRadius * stretch.x;
+    if (Math.hypot(x - hx, y) < handleHitRadius) return 'stretchX';
+
+    const hy = guideRadius * stretch.y;
+    if (Math.hypot(x, y - hy) < handleHitRadius) return 'stretchY';
+
+    const rotY = - (guideRadius * stretch.y + 50); // 对应 drawControl 的长度
+    if (Math.hypot(x, y - rotY) < handleHitRadius) return 'rotate';
+
+    return null;
+  };
+
+  const handlePointerDown = (e) => {
+    const pos = getCanvasPoint(e);
+    // 传入 scaleX 修正点击区域
+    const target = hitTest(pos.x, pos.y, pos.scaleX);
+    if (target) {
+      setIsDragging(target);
+      lastMousePos.current = pos;
+      e.preventDefault(); 
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (!isDragging) return;
+    const pos = getCanvasPoint(e);
+    
+    const dx = pos.x - lastMousePos.current.x;
+    const dy = pos.y - lastMousePos.current.y;
+    const localPos = toLocalSpace(pos.x, pos.y);
+    const guideRadius = Math.max(startRadius, 50) + 20; 
+
+    if (isDragging === 'center') {
+      setCenterOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+    } else if (isDragging === 'stretchX') {
+      const newScaleX = Math.max(0.2, localPos.x / guideRadius);
+      setStretch(prev => ({ ...prev, x: newScaleX }));
+    } else if (isDragging === 'stretchY') {
+      const newScaleY = Math.max(0.2, localPos.y / guideRadius);
+      setStretch(prev => ({ ...prev, y: newScaleY }));
+    } else if (isDragging === 'rotate') {
+       const relX = pos.x - localPos.cx;
+       const relY = pos.y - localPos.cy;
+       const newAngle = Math.atan2(relY, relX) + Math.PI / 2;
+       setRotationAngle(newAngle);
+    }
+
+    lastMousePos.current = pos;
+    e.preventDefault();
+  };
+
+  const handlePointerUp = () => {
+    setIsDragging(null);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    // 加载图片 (如果存在)
-    if (centerImage) {
-      const img = new Image();
-      img.src = centerImage;
-      img.onload = () => {
-        drawScene(ctx, canvas.width, canvas.height, img, false); // false = 白底
-      };
-      if (img.complete) {
-        drawScene(ctx, canvas.width, canvas.height, img, false);
+    const render = () => {
+      if (centerImage) {
+        const img = new Image();
+        img.src = centerImage;
+        img.onload = () => drawScene(ctx, canvas.width, canvas.height, img, false);
+        if (img.complete) drawScene(ctx, canvas.width, canvas.height, img, false);
+      } else {
+        drawScene(ctx, canvas.width, canvas.height, null, false);
       }
-    } else {
-      drawScene(ctx, canvas.width, canvas.height, null, false);
-    }
+    };
+
+    render();
   }, [drawScene, centerImage, canvasSize]);
 
-
-  // --- 执行下载 ---
   const executeDownload = async () => {
     const tempCanvas = document.createElement('canvas');
-    const scaleFactor = downloadQuality; // 1, 2, 4
+    const scaleFactor = downloadQuality;
     const logicalSize = canvasSize;
     
     tempCanvas.width = logicalSize * scaleFactor;
@@ -178,38 +415,64 @@ const SpiralTextGenerator = () => {
     }
 
     const isActuallyTransparent = downloadFormat === 'png' && downloadTransparent;
-    drawScene(ctx, logicalSize, logicalSize, imgObj, isActuallyTransparent);
+    drawScene(ctx, logicalSize, logicalSize, imgObj, isActuallyTransparent, true);
 
     const mimeType = downloadFormat === 'png' ? 'image/png' : 'image/jpeg';
     const dataUrl = tempCanvas.toDataURL(mimeType, 0.9);
     
     const link = document.createElement('a');
-    link.download = `spiral-text-${Date.now()}.${downloadFormat}`;
+    link.download = `spiral-text-${spiralShape}-${Date.now()}.${downloadFormat}`;
     link.href = dataUrl;
     link.click();
     
     setShowDownloadModal(false);
   };
 
+  // 形状选择组件
+  const ShapeSelector = () => (
+    <div className="grid grid-cols-4 gap-2">
+      {[
+        { id: 'circle', icon: Circle, label: '圆形' },
+        { id: 'triangle', icon: Triangle, label: '三角形' },
+        { id: 'square', icon: Square, label: '方形' },
+        { id: 'pentagon', icon: Hexagon, label: '五边形' },
+      ].map((shape) => (
+        <button
+          key={shape.id}
+          onClick={() => {
+            setSpiralShape(shape.id);
+            setStretch({ x: 1, y: 1 }); // 重置拉伸
+            setCenterOffset({ x: 0, y: 0 }); 
+            setRotationAngle(0); 
+          }}
+          className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${
+            spiralShape === shape.id 
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105' 
+              : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:bg-gray-50'
+          }`}
+          title={shape.label}
+        >
+          <shape.icon size={20} className={shape.id === 'triangle' ? 'fill-current' : ''} />
+        </button>
+      ))}
+    </div>
+  );
+
   return (
-    // 修改 1: 外层容器 h-screen overflow-hidden 锁定全屏不滚动
     <div className="h-screen w-full bg-gray-50 font-sans text-gray-800 relative overflow-hidden flex flex-col">
       
       {/* 主布局容器 */}
-      {/* 修改 2: flex-col-reverse 让 Child 2 (Preview) 在视觉顶部 */}
       <div className="flex flex-col-reverse md:flex-row h-full w-full">
 
         {/* 左侧(桌面)/底部(手机)：控制面板 */}
-        {/* 修改 3: flex-1 和 overflow-y-auto 确保只有这部分可以滚动 */}
         <div className="flex-1 w-full md:w-1/3 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] md:shadow-lg z-10 md:border-r border-gray-200 h-full overflow-y-auto">
           
-          {/* 移动端顶部标题栏 (现在作为控制面板的第一部分) */}
+          {/* 移动端顶部标题栏 */}
           <div className="md:hidden bg-white px-6 py-4 border-b flex items-center justify-between sticky top-0 z-20 shadow-sm">
             <div className="flex items-center gap-2">
               <RefreshCw className="w-5 h-5 text-indigo-600" /> 
               <h1 className="text-lg font-bold text-gray-800">螺旋生成器</h1>
             </div>
-            {/* 可以在这里放下载按钮的简化版 */}
             <button 
               onClick={() => setShowDownloadModal(true)}
               className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"
@@ -219,7 +482,6 @@ const SpiralTextGenerator = () => {
           </div>
 
           <div className="p-6">
-            {/* 桌面端标题 (Mobile 隐藏) */}
             <h1 className="hidden md:flex text-2xl font-bold mb-6 items-center gap-2 text-indigo-600">
               <RefreshCw className="w-6 h-6" /> 螺旋生成器
             </h1>
@@ -251,7 +513,21 @@ const SpiralTextGenerator = () => {
 
               <hr className="border-gray-100" />
 
-              {/* 2. 核心参数滑块 */}
+              {/* 2. 形状选择 */}
+              <div className="space-y-2">
+                 <label className="text-sm font-semibold text-gray-500 uppercase tracking-wider">螺旋形状</label>
+                 <ShapeSelector />
+                 <p className="text-xs text-gray-400 mt-2">💡 提示：你可以直接在画布上拖拽蓝色圆点来调整形状和位置。</p>
+                 <div className="flex gap-4 text-xs text-indigo-600 mt-1 flex-wrap">
+                    <span className="flex items-center gap-1"><Move size={12}/> 拖拽中心移动</span>
+                    <span className="flex items-center gap-1"><Maximize2 size={12}/> 拖拽边缘拉伸</span>
+                    <span className="flex items-center gap-1"><RefreshCcw size={12}/> 拖拽顶部旋转</span>
+                 </div>
+              </div>
+
+              <hr className="border-gray-100" />
+
+              {/* 3. 核心参数滑块 */}
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">外观参数</h3>
                 
@@ -352,7 +628,7 @@ const SpiralTextGenerator = () => {
 
               <hr className="border-gray-100" />
 
-              {/* 3. 样式开关 */}
+              {/* 4. 样式开关 */}
               <div className="grid grid-cols-2 gap-4">
                  <button
                   onClick={() => setIsClockwise(!isClockwise)}
@@ -373,7 +649,7 @@ const SpiralTextGenerator = () => {
 
               <hr className="border-gray-100" />
 
-              {/* 4. 中心图片 */}
+              {/* 5. 中心图片 */}
               <div className="space-y-2">
                 <label className="text-sm font-semibold flex items-center gap-2">
                   <ImageIcon className="w-4 h-4" /> 中心图案
@@ -394,7 +670,6 @@ const SpiralTextGenerator = () => {
                 </div>
               </div>
 
-              {/* 下载按钮 (Desktop or Bottom of list) */}
               <button
                 onClick={() => setShowDownloadModal(true)}
                 className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-indigo-700 transition transform active:scale-95"
@@ -407,7 +682,6 @@ const SpiralTextGenerator = () => {
         </div>
 
         {/* 右侧(桌面)/顶部(手机)：预览画布 */}
-        {/* 修改 4: Mobile固定高度 h-[40vh] 且不收缩 shrink-0, 这样它永远占据顶部 */}
         <div className="h-[40vh] md:h-full md:flex-1 bg-gray-200 flex items-center justify-center p-4 md:p-10 overflow-hidden relative shrink-0 z-0">
           <div className="absolute inset-0 opacity-10 pointer-events-none" 
                style={{backgroundImage: 'radial-gradient(#9ca3af 1px, transparent 1px)', backgroundSize: '20px 20px'}}>
@@ -418,9 +692,17 @@ const SpiralTextGenerator = () => {
               ref={canvasRef}
               width={canvasSize}
               height={canvasSize}
-              // 保持 canvas 适应容器
-              className="max-h-[35vh] md:max-h-[80vh] w-auto h-auto object-contain"
-              style={{ width: 'auto', height: 'auto', maxWidth: '100%' }}
+              className="max-h-[35vh] md:max-h-[80vh] w-auto h-auto object-contain cursor-move touch-none"
+              style={{ width: 'auto', height: 'auto', maxWidth: '100%', touchAction: 'none' }}
+              // 添加交互事件
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              // 添加 Touch 事件支持，确保移动端兼容性
+              onTouchStart={handlePointerDown}
+              onTouchMove={handlePointerMove}
+              onTouchEnd={handlePointerUp}
             />
           </div>
 
@@ -446,7 +728,6 @@ const SpiralTextGenerator = () => {
             
             <div className="p-6 space-y-6">
               
-              {/* 1. 清晰度选择 */}
               <div className="space-y-3">
                 <label className="text-sm font-semibold text-gray-700 block">清晰度 (Resolution)</label>
                 <div className="grid grid-cols-3 gap-3">
@@ -466,7 +747,6 @@ const SpiralTextGenerator = () => {
                 </div>
               </div>
 
-              {/* 2. 格式与透明度 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                    <label className="text-sm font-semibold text-gray-700 block">文件格式</label>
@@ -488,7 +768,7 @@ const SpiralTextGenerator = () => {
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-gray-700 block">背景设置</label>
                   <button
-                    disabled={downloadFormat === 'jpeg'} // JPEG 不支持透明
+                    disabled={downloadFormat === 'jpeg'} 
                     onClick={() => setDownloadTransparent(!downloadTransparent)}
                     className={`w-full py-2 px-3 rounded-lg border text-sm flex items-center justify-between transition-all ${
                        downloadFormat === 'jpeg' ? 'bg-gray-50 text-gray-400 cursor-not-allowed border-gray-200' : 
